@@ -1,0 +1,253 @@
+<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>具身数据管理平台 架构设计</title>
+<style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;max-width:900px;margin:40px auto;padding:0 24px;line-height:1.7;color:#1a1a1a}
+h1{border-bottom:3px solid #2E75B6;padding-bottom:8px}
+h2{border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:36px;color:#2E75B6}
+h3{margin-top:28px} h4{margin-top:22px;color:#444}
+table{border-collapse:collapse;width:100%;margin:16px 0}
+th,td{border:1px solid #ccc;padding:8px 12px;text-align:left;vertical-align:top}
+th{background:#D5E8F0}
+code{background:#f0f0f0;padding:2px 5px;border-radius:3px;font-size:.9em}
+pre{background:#1e1e1e;color:#d4d4d4;padding:16px;border-radius:6px;overflow-x:auto}
+pre code{background:none;color:inherit;padding:0}
+blockquote{border-left:4px solid #2E75B6;margin:12px 0;padding:4px 16px;color:#555;background:#f7fbff}
+hr{border:none;border-top:1px solid #e0e0e0;margin:28px 0}
+</style></head><body><h1>具身数据管理平台 — 架构设计文档</h1>
+<blockquote>版本 v1.0 · 2026-06-04</blockquote>
+<blockquote>范围:带预览 UI 的 Web 数据管理平台,自建(LAS 仅作竞品参考)</blockquote>
+<hr>
+<h2>0. 背景与目标</h2>
+<h3>现状</h3>
+<ul>
+<li><strong>数据格式</strong>:LeRobot v2.1 标准。每条 recording = <code>dataset.json</code>(业务元信息) + <code>meta/</code>(info/tasks/episodes/episodes_stats) + <code>data/*.parquet</code>(双臂 14 维 state/action 时序) + <code>videos/*.mp4</code>(3 路相机:cam_high / cam_left_wrist / cam_right_wrist)。机器人型号 moz1,fps=30。</li>
+<li><strong>原始数据</strong>:已在 TOS,天然 recording 粒度,路径 <code>recordings/{recording_id}/...</code>,通过预签名 URL 下载。</li>
+<li><strong>处理流程</strong>:服务端 Quanta API → 导出(普通线 / DAgger 线)→ 切 train/val → 配采样权重 → 统计 + 质检 → 喂训练。全程是 <strong>CLI 脚本 + 手工拼装的 <code>{数据集:权重}</code> JSON</strong>。</li>
+</ul>
+<h3>痛点</h3>
+<p>没有中央目录、血缘靠手工 JSON、质检结果不落库、无版本管理、纯命令行无预览。</p>
+<h3>目标</h3>
+<p>把&quot;脚本 + 手工 JSON&quot;升级为&quot;<strong>中央目录 + 血缘可追溯 + 可视化预览 + 一键编排 + 质量门禁</strong>&quot;的 Web 平台。脚本不重写,包装成平台的算子。</p>
+<hr>
+<h2>1. 核心心智模型:两层视图</h2>
+<p>借鉴 LAS 的分层,平台底层是<strong>同一套 TOS 存储 + 同一套元数据服务</strong>,对外提供两层视图:</p>
+<table><thead><tr><th>层</th><th>视角</th><th>抽象单位</th><th>实现</th><th>关心的事</th></tr></thead><tbody>
+<tr><td><strong>湖表层(数据湖)</strong></td><td>数据工程 / 可筛</td><td>表 / 字段 / 分区</td><td>recording <strong>manifest 表</strong>,按 <code>collection_id / robot_id / task</code> 分区</td><td>有哪些数据、可 SQL 筛、权限、可审计</td></tr>
+<tr><td><strong>数据集层</strong></td><td>AI / 训练</td><td>样本 / 模态 / 标签</td><td>LeRobot 数据集,切 train/val/eval</td><td>样本数、模态、配方、喂模型</td></tr>
+</tbody></table>
+<p><strong>术语纪律</strong>:&quot;Catalog&quot;专指湖表元数据层;管理数据集的那层称「<strong>数据集管理 / 数据集详情</strong>」,不叫 Catalog,避免歧义。</p>
+<p><strong>关键设计</strong>:湖表 = <strong>manifest 表(存指针)</strong>,不是把信号灌进表。每行一条 recording,列 = 元数据 + TOS 路径 + <code>episode_stats</code> 摘要;mp4/parquet 大文件留在 TOS。</p>
+<hr>
+<h2>2. 总体分层架构</h2>
+<pre><code>
+┌──────────────────────────────────────────────────────────────────┐
+│  ⑥ 前端 Web UI                                                     │
+│  数据湖 │ 数据集生成向导 │ recording预览 │ DOCTOR质检 │ 数据集管理 │ 血缘 │ 任务中心 │
+└───────────────────────────────┬──────────────────────────────────┘
+                                 │ REST / WebSocket
+┌───────────────────────────────┴──────────────────────────────────┐
+│  ⑤ 后端服务层 (FastAPI,可直接 import 现有 Python 脚本)             │
+│  Lake API │ Preview API │ QA(Doctor) API │ Dataset API │ Lineage API │ Job API │
+└──────┬──────────────────┬───────────────────┬────────────────────┘
+       │                  │                   │
+┌──────┴───────┐  ┌───────┴────────┐  ┌───────┴──────────────────────┐
+│ ④ 编排引擎    │  │ ③ 元数据层      │  │ ② 存储层                      │
+│ (Celery)     │  │ PostgreSQL     │  │ TOS: recordings/ + datasets/  │
+│ 封装现有脚本  │  │ 血缘·状态·配方·质检│  │ + 预览缓存(抽帧/轨迹图/缩略图) │
+│ 为算子        │  └────────────────┘  └──────────────────────────────┘
+└──────┬───────┘
+┌──────┴──────────────────────────────────────────────────────────┐
+│  ① 数据接入层  Quanta API 适配器 (/export_dataset 等)             │
+└──────────────────────────────────────────────────────────────────┘
+</code></pre>
+<p><strong>规模决策</strong>:当前规模(数千 recording)用 <strong>Postgres manifest 表 + TOS</strong> 足够,不必上 Iceberg/Hive。等需要分布式算子加工 + PB 级扫描时再演进。</p>
+<hr>
+<h2>3. 领域模型</h2>
+<pre><code>
+Collection / Dagger任务 / Test任务   (上游来源)
+        └─ Recording  ← 数据湖一等公民,在 TOS,带质检+生命周期状态+标签
+                 │  [选择 + 配方 + 切分,生成不可变快照]
+                 ▼
+        Dataset (版本化)  ── 类型: train / val / eval-benchmark
+                 ├─ Recipe(配方: group rules / 采样权重 / 切分参数)
+                 ├─ QAReport(DOCTOR: PASS/WARN/FAIL)
+                 ├─ Episode[] (episode_index, length, task, dagger_type)
+                 │  [发布,冻结为 TOS 版本]
+                 ▼
+        DatasetVersion (TOS 冻结 URI)
+                 │  [引用]
+                 ▼
+        TrainingJob ──评测结果──┐
+                 ▲──────────────┘  (评测反推数据问题)
+
+  Lineage(双向边表) 贯穿全程
+</code></pre>
+<h3>核心实体字段(摘要)</h3>
+<ul>
+<li><strong>Recording</strong>:<code>recording_id / collection_id / robot_id / task_name / 时长 / 帧数 / fps / 采集时间 / 设备 / dagger_type / tos_path / 质检状态 / 生命周期状态(active/quarantined) / 标签 / episode_stats摘要</code></li>
+<li><strong>Dataset</strong>:<code>id / name / version / type(train/val/eval) / recipe_id / recording_ids[] / 总帧数 / robot_type / 状态 / 发布URI</code></li>
+<li><strong>Recipe</strong>:<code>group_rules / group_config / 采样权重 / train_ratio / seed</code></li>
+<li><strong>QAReport</strong>:<code>dataset_id / 总判定(PASS/WARN/FAIL) / 检查项明细[] / JSON</code></li>
+<li><strong>Lineage</strong>:<code>src / src_type / dst / dst_type</code>(支持双向追溯)</li>
+</ul>
+<hr>
+<h2>4. 功能模块</h2>
+<h3>模块 1 · 原始数据湖(湖表层)</h3>
+<ul>
+<li><strong>recording 索引表</strong>:从采集侧 / <code>dataset.json</code> 抽元数据建 manifest 表,大文件留 TOS。</li>
+<li><strong>多维筛选(faceted)</strong>:<code>task × 设备 × collection × 时间 × 数据类型(采集/test/dagger)</code>,task 是默认聚合维度但非唯一。</li>
+<li><strong>recording 级预览</strong>(见模块 3):预签名 URL 直接流式播放,无需下载到平台。</li>
+<li><strong>生命周期</strong>:坏帧/废采集标记 <code>quarantined</code>,从可选池排除,不物理删除。</li>
+</ul>
+<h3>模块 2 · 数据集生成(筛选 → 配方 → 切分 → 质检)</h3>
+<p>借鉴 LeRobot FILTERING 的三层清洗结构:</p>
+<ol>
+<li><strong>机械式筛选</strong>:时长 / 帧率等硬指标,用滑块/范围。</li>
+<li><strong>统计式筛选</strong>:动作量最小 / 最抖的排行榜 + flag(可批量 Flag all)。</li>
+<li><strong>诊断式筛选</strong>:整体健康自动打标签(如 smoothness 等级)。</li>
+</ol>
+<p><strong>核心产品原则:诊断/执行分离</strong>——平台只做<strong>诊断 + 标记(flag)</strong>,<strong>绝不一键删除</strong>;标记结果导出成操作清单,由人确认执行。理由:数据是具身项目最值钱的资产,误删成本巨大。</p>
+<ul>
+<li><strong>配方(Recipe)</strong>:<code>GROUP_RULES / GROUP_CONFIG / 采样权重</code>从硬编码变成结构化可编辑,改完实时预览&quot;权重占比 vs 帧数占比 vs 实际采样占比&quot;三栏对比。</li>
+<li><strong>生成 = 不可变快照</strong>:输入 <code>recording_ids + 配方 + seed</code> → 冻结的 dataset 版本,可复现。</li>
+<li><strong>eval 泄漏防护</strong>:选中 recording 若已属某评测集,红色告警。</li>
+</ul>
+<h4>「验证」与「质检」的区分(脚本对应)</h4>
+<p>现有算法脚本里的&quot;验证、质检&quot;内容<strong>是两类不同的功能,落到不同子环节</strong>,不要混为一谈:</p>
+<ul>
+<li><strong>验证(Validation)= 配方配得对不对</strong> → 属于<strong>配方配置</strong>子环节</li>
+<li><code>adjust_sampling_ratio.py</code>:算采样权重(算法本体)</li>
+<li><code>analyze_sampling_frames.py</code>:<strong>验证</strong>&quot;实际采样占比是否符合设定&quot;,给配方所见即所得的反馈</li>
+<li><strong>质检(QA)= 数据本身对不对</strong> → 属于<strong>质检门禁</strong>子环节,背后调 DOCTOR 通用能力</li>
+<li><code>check_chinese.py</code>:标注合规(中文混入)</li>
+<li><code>check_evalset_split.sh</code>:数据完整性(meta 帧数 vs parquet 行数 / 缺帧)</li>
+<li><strong>统计(描述性)</strong> → 跨到数据集管理的元数据/构成分析</li>
+<li><code>dataset_statistics.py</code>:帧数/时长/prompt/recording 统计</li>
+</ul>
+<pre><code>
+数据集生成
+├─ 三层筛选 ├─ flag 标记
+├─ 配方配置(采样权重/分组)
+│    ├─ adjust_sampling_ratio.py   ← 算权重
+│    └─ analyze_sampling_frames.py ← 【验证】占比符不符合预期
+├─ train/val/eval 切分
+├─ 质检门禁校验  ← 调 DOCTOR 能力
+│    ├─ check_chinese.py           ← 【质检】标注合规
+│    └─ check_evalset_split.sh     ← 【质检】数据完整性
+└─ 快照生成
+</code></pre>
+<blockquote>一句话:<strong>质检 → DOCTOR 门禁(拦坏数据);验证 → 配方配置的采样自检(确认配方生效)</strong>。<code>dataset_statistics.py</code> 属描述性统计,沉淀到数据集管理。</blockquote>
+<h3>模块 3 · recording 级预览(探索性,人脑判断)</h3>
+<p>预览三件套是<strong>基线</strong>(否则工程师不用):</p>
+<ul>
+<li><strong>state/action 叠加曲线</strong>:<code>leftarm_state_*</code>(实线)vs <code>leftarm_cmd_*</code>(虚线)叠在同图,一眼看控制延迟/跟随质量。</li>
+<li><strong>视频↔曲线同步光标</strong>:一条竖线串起 3 路相机 + 14 维曲线。</li>
+<li><strong>键盘流</strong>:Space 播放、↑↓ 切 episode。</li>
+<li>曲线<strong>按&quot;相邻关节&quot;分组</strong>(左臂 7 关节一组、右臂一组、双 gripper),不按左右臂。</li>
+</ul>
+<p>进阶:</p>
+<ul>
+<li><strong>FRAMES 首末帧网格</strong>:低成本高 ROI,判断&quot;任务到底成没成&quot;(首帧初始态一致性 / 末帧完成态)。建议 P1 即做。</li>
+<li><strong>3D Replay + Trail</strong>:URDF 白名单 + Joint Mapping 桥接任意列名;末端轨迹 Trail 看运动模式;action vs state 双源重建。(可后置)</li>
+</ul>
+<h3>模块 4 · DOCTOR 质检门禁(结构化质量保障)</h3>
+<p>把质检产品化成<strong>红绿灯门禁</strong>:</p>
+<ul>
+<li><strong>PASS / WARN / FAIL 三档</strong> + 顶部一句话健康总结 + 分项详情 + <strong>JSON 输出(可接 CI)</strong>。</li>
+<li><strong>流程门禁</strong>:<code>PASS → 可进训练队列;WARN → 需人工确认;FAIL → 打回修</code>。</li>
+<li><strong>检查项</strong>(很多可用现成 <code>episode_stats</code> 零成本算):</li>
+<li>frozen action(某维 std≈0,如本数据 psi 全 0)</li>
+<li>dropped frames(meta 帧数 vs parquet 行数,复用 <code>check_evalset_split.sh</code>)</li>
+<li>clipped values(贴边界)</li>
+<li>相机分辨率一致性(都应 240×320)</li>
+<li>中文混入标注(复用 <code>check_chinese.py</code>)</li>
+<li>采样占比偏差(复用 <code>analyze_sampling_frames.py</code>)</li>
+</ul>
+<h3>模块 5 · 数据集管理 / 数据集详情</h3>
+<ul>
+<li><strong>元数据</strong>:基础(robot_type/version/tasks)→ 规模(总帧数/episodes/fps/总时长)→ 模态(相机分辨率)→ 时序(episode 长度<strong>分布直方图</strong>)。<strong>方差/分布比均值有信息量</strong>。</li>
+<li><strong>构成分析(配方)</strong>:按 group/task/设备 的帧数占比环图 + 权重 vs 实际采样对比。</li>
+<li><strong>质量数据</strong>:DOCTOR 红绿灯 + 明细。</li>
+<li><strong>血缘</strong>:↑由哪些采集/test/dagger 生成;↓被哪些训练任务引用。</li>
+</ul>
+<h3>模块 6 · 发布与引用(TOS)</h3>
+<ul>
+<li><strong>发布 = 冻结为不可变版本</strong>:生成带版本号的 manifest,<code>tos://.../datasets/{name}/{version}/</code>。</li>
+<li><strong>去重上传</strong>:原始 recording 已在 TOS,优先用 <strong>TOS 内 copy / 软链清单</strong>,不重传大文件。</li>
+<li><strong>引用登记</strong>:训练任务启动回调平台登记 <code>dataset_version ← training_job</code>,血缘&quot;被谁引用&quot;才有数据。</li>
+</ul>
+<h3>模块 7 · 任务中心(编排)</h3>
+<ul>
+<li>导出/切分/采样/质检任务统一队列:状态、日志、耗时、产出物。</li>
+<li><strong>流水线模板</strong>:导出→切分→采样→质检 串成 DAG,一键触发、有状态、可重跑单阶段。</li>
+<li>现有脚本包装成算子,不重写。</li>
+</ul>
+<hr>
+<h2>5. 训练集 / 评测集策略</h2>
+<p><strong>结论:要分,且分成两类各司其职,不要只做一个随机 95/5。</strong></p>
+<p>具身策略真实评测靠真机/仿真 rollout 成功率,离线 val loss 与成功率相关性弱,故单纯随机切的 val 集对选模型价值有限。</p>
+<table><thead><tr><th></th><th><strong>训练内验证集 (val)</strong></th><th><strong>独立评测集 (eval / benchmark)</strong></th></tr></thead><tbody>
+<tr><td>目的</td><td>监控过拟合、看 action MSE、早停</td><td>衡量泛化、定真机评测场景</td></tr>
+<tr><td>切分粒度</td><td>episode/recording 级随机切(95/5)</td><td>task/scene/collection 级整体留出</td></tr>
+<tr><td>关键约束</td><td>同一 recording 的帧绝不跨 train/val</td><td>recording 永不进任何训练集</td></tr>
+<tr><td>来源</td><td>从训练数据切</td><td>最好专门采集的 collection</td></tr>
+</tbody></table>
+<p><strong>两个强约束:</strong></p>
+<ol>
+<li>切分必须在 <strong>recording/episode 级,不能 frame 级</strong>(相邻帧高度相关,frame 级切高估性能)。</li>
+<li>评测集做成数据湖<strong>一等公民,全局留出</strong>;生成任何训练集时平台自动校验未碰评测集 recording。</li>
+</ol>
+<p>数据集类型枚举:<code>train / val / eval-benchmark</code>。</p>
+<hr>
+<h2>6. 训推评闭环(自建独有优势)</h2>
+<p>LAS 等开源/通用工具做不到,应显式设计进血缘:</p>
+<ul>
+<li><strong>从评测反推数据</strong>:某 policy 在哪些 episode 失败率高 → 反查这些 recording 特征 → 定位数据问题(复用&quot;数据集→训练任务&quot;血缘的反向边)。</li>
+<li><strong>本体专属阈值</strong>:沉淀&quot;moz1 在某任务下动作 σ 的正常范围&quot;,比通用阈值有价值。</li>
+<li><strong>跨数据集对比</strong>:配方/质量/抖动横比。</li>
+</ul>
+<blockquote>注:训练超参建议(action chunk 长度等)<strong>不在本期范围</strong>,平台职责聚焦&quot;管数据 + 控质量&quot;,不碰训练配置。</blockquote>
+<hr>
+<h2>7. 技术选型</h2>
+<table><thead><tr><th>层</th><th>选型</th><th>理由</th></tr></thead><tbody>
+<tr><td>前端</td><td>React + Ant Design + ECharts</td><td>表格/看板成熟;ECharts 画 14 维轨迹曲线</td></tr>
+<tr><td>后端</td><td>Python FastAPI</td><td>现有脚本全 Python,可直接 import 复用</td></tr>
+<tr><td>元数据库</td><td>PostgreSQL</td><td>manifest 表 + 血缘递归查询够用</td></tr>
+<tr><td>编排</td><td>Celery</td><td>脚本封装成 task</td></tr>
+<tr><td>存储</td><td>TOS(沿用)</td><td>recordings/ + datasets/,大文件不进库</td></tr>
+<tr><td>预览缓存</td><td>ffmpeg 抽帧(脚本已依赖)</td><td>复用现有依赖</td></tr>
+</tbody></table>
+<hr>
+<h2>8. 功能全景图</h2>
+<pre><code>
+原始数据湖(recording, TOS, manifest表可SQL筛)
+   │  ① 探索性预览(人脑判断): EPISODES叠加曲线 / FRAMES首末帧 / 3D Trail
+   ▼
+数据集生成 = 筛选(FILTERING三层·诊断不删) + 配方(权重/分组) + 切分(train/val/eval)
+   │  ② 结构化门禁: DOCTOR 体检 PASS/WARN/FAIL —— 决定能否进训练队列
+   ▼
+数据集管理
+   ├─ 元数据(分布直方图)  ├─ recording级预览  ├─ 构成/配方
+   ├─ 质量红绿灯(DOCTOR)
+   └─ 血缘: ↑由采集/test/dagger生成  ↓被训练任务引用
+   │  ③ 一键发布冻结版本
+   ▼
+TOS 版本 ──引用──&gt; 训练任务 ──评测结果──┐
+   ▲────────── ④ 从评测反推数据问题 ──────┘  (训推评闭环, 自建独有)
+</code></pre>
+<hr>
+<h2>9. 分期路线图</h2>
+<table><thead><tr><th>阶段</th><th>范围</th><th>价值</th></tr></thead><tbody>
+<tr><td><strong>P0 地基</strong></td><td>领域模型 + Postgres + 数据湖 manifest 表入库(扫现有目录回填)</td><td>中央目录 + 血缘,取代手工 JSON</td></tr>
+<tr><td><strong>P1 预览</strong></td><td>recording 级预览(EPISODES 叠加曲线 + FRAMES 网格,只读)</td><td>兑现&quot;数据预览&quot;核心诉求,即时可用</td></tr>
+<tr><td><strong>P2 质检</strong></td><td>DOCTOR 门禁落库 + 红绿灯看板</td><td>数据质量可视、可拦截</td></tr>
+<tr><td><strong>P3 编排</strong></td><td>脚本封装算子 + 数据集生成向导 + 任务中心</td><td>闭环,告别命令行</td></tr>
+<tr><td><strong>P4 进阶</strong></td><td>采样配方所见即所得 + 3D Trail + 训推评反推</td><td>效率与独有优势</td></tr>
+</tbody></table>
+<blockquote>建议 <strong>P0+P1 先做</strong>:入库脚本可直接扫现有 <code>out_182_unchecked</code> 这类目录回填,几天见价值,不影响现有脚本继续跑。</blockquote>
+<hr>
+<h2>附:与 LAS(竞品)的关系</h2>
+<ul>
+<li><strong>采纳</strong>:两层视图模型、术语纪律(Catalog=湖表层)、manifest 表存指针、算子+工作流编排思路。</li>
+<li><strong>不采纳</strong>:Lance 格式(坚持 LeRobot,训练侧本就消费它,省一道转换)、Iceberg/Hive(当前规模 Postgres 足够)。</li>
+<li><strong>LAS 替不了、必须自建</strong>:LeRobot 格式理解、recording 级预览、具身 DOCTOR 质检、配方采样权重、具身血缘 + 评测反推。</li>
+</ul></body></html>

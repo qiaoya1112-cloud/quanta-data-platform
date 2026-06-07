@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Claude / editor
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Large raw data (not for repo / deploy)
+out_182_unchecked/
