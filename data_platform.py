@@ -892,7 +892,7 @@ BASE_TEMPLATE = """<!DOCTYPE html>
     <a href="/datasets" class="nav-item {{ 'active' if active=='datasets' }}"><span class="icon">&#9776;</span><span class="nav-txt">数据集管理</span></a>
     <div class="nav-label">自动化任务</div>
     <a href="/operators" class="nav-item {{ 'active' if active=='operators' }}"><span class="icon">&#9881;</span><span class="nav-txt">算子管理</span></a>
-    <a href="/pipelines" class="nav-item {{ 'active' if active=='pipelines' }}"><span class="icon">&#9783;</span><span class="nav-txt">任务管理</span></a>
+    <a href="/pipelines" class="nav-item {{ 'active' if active=='pipelines' }}"><span class="icon">&#9783;</span><span class="nav-txt">工作流管理</span></a>
     <a href="/runs" class="nav-item {{ 'active' if active=='runs' }}"><span class="icon">&#9654;</span><span class="nav-txt">执行记录</span></a>
   </nav>
   {% elif top=='asset' %}
@@ -2380,7 +2380,7 @@ def dataset_detail_panel_v2(d, viewed_ver=""):
     # 处理数据抽屉: 选任务 + 参数(结构化/代码) → 执行生成新版本
     pl_opts = "".join(f'<option value="task|{p["name"]}">{p["name"]}</option>' for p in PIPELINES)
     cur_ver = ds_versions(d)[0]["version"]
-    # 每个任务已配置好的参数 key (来自其算子定义, 不可改, 只能填 value)
+    # 每个工作流已配置好的参数 key (来自其算子定义, 不可改, 只能填 value)
     task_params = {}
     for p in PIPELINES:
         keys = []
@@ -2401,25 +2401,25 @@ def dataset_detail_panel_v2(d, viewed_ver=""):
           <button class="drawer-close" onclick="document.getElementById('procDrawer').classList.remove('active')">&times;</button></div>
         <form method="post" action="/datasets/{d['id']}/process" style="display:flex;flex-direction:column;min-height:0;flex:1;">
           <div class="drawer-body">
-            <div class="section-label">任务</div>
+            <div class="section-label">工作流</div>
             <div class="fg">
               <select name="op" onchange="procRenderParams()">{pl_opts}</select>
-              <div class="hint">在当前数据集 {cur_ver} 上执行该任务, 产出一个新版本</div>
+              <div class="hint">在当前数据集 {cur_ver} 上执行该工作流, 产出一个新版本</div>
             </div>
             <div class="section-label">处理说明</div>
             <div class="fg"><input name="note" placeholder="本次处理做了什么 (可选)"></div>
             <div class="section-label">请求参数</div>
             <div class="param-mode">
-              <button type="button" class="pm-btn active" data-m="struct" onclick="procMode('struct')">结构化</button>
-              <button type="button" class="pm-btn" data-m="code" onclick="procMode('code')">代码</button>
+              <button type="button" class="pm-btn active" data-m="code" onclick="procMode('code')">代码</button>
+              <button type="button" class="pm-btn" data-m="struct" onclick="procMode('struct')">结构化</button>
             </div>
             <div class="proc-params-area">
-              <div id="procStruct">
-                <div class="hint" style="margin-bottom:8px;">参数名由所选任务的算子配置决定, 此处仅填写取值。</div>
-                <div id="procParamBox"></div>
+              <div id="procCode">
+                <div class="fg" style="margin-bottom:0;"><textarea name="params_code" class="code-editor" rows="8" placeholder="# 命令行参数 / JSON&#10;--train-ratio 0.95 --seed 42"></textarea></div>
               </div>
-              <div id="procCode" style="display:none;">
-                <textarea name="params_code" class="code-editor" style="width:100%;box-sizing:border-box;" rows="8" placeholder="# 命令行参数 / JSON&#10;--train-ratio 0.95 --seed 42"></textarea>
+              <div id="procStruct" style="display:none;">
+                <div class="hint" style="margin-bottom:8px;">参数名由所选工作流的算子配置决定, 此处仅填写取值。</div>
+                <div id="procParamBox"></div>
               </div>
             </div>
           </div>
@@ -2441,7 +2441,7 @@ def dataset_detail_panel_v2(d, viewed_ver=""):
         var name=(sel.value.split('|')[1]||sel.value);
         var keys=(window._taskParams||{{}})[name]||[];
         var box=document.getElementById('procParamBox');
-        if(!keys.length){{ box.innerHTML='<div class="muted" style="font-size:12px;padding:4px 0;">该任务无可配置参数</div>'; return; }}
+        if(!keys.length){{ box.innerHTML='<div class="muted" style="font-size:12px;padding:4px 0;">该工作流无可配置参数</div>'; return; }}
         box.innerHTML='<table class="param-table"><tbody>'+keys.map(function(k){{
           return '<tr><td class="pk" style="font-family:monospace;font-size:12px;color:rgba(0,0,0,0.7);">'+k+'</td>'+
             '<td><input class="fp-val" placeholder="填写值"></td></tr>';
@@ -2607,7 +2607,7 @@ def operators():
               <td><span class="op-script">{op['ident']}</span></td>
               <td class="muted" style="max-width:460px;"><span class="desc-clamp">{op['desc']}</span></td>
               <td>{op['creator']}</td>
-              <td class="actions-cell"><a href="/pipelines?op={op['id']}">关联任务</a> · <a href="#" onclick="openOpForm('{op['id']}');return false;">编辑</a></td>
+              <td class="actions-cell"><a href="/pipelines?op={op['id']}">关联工作流</a> · <a href="#" onclick="openOpForm('{op['id']}');return false;">编辑</a></td>
             </tr>"""
 
     ops_js = json.dumps({o["id"]: {"name": o["name"], "ident": o["ident"], "script": o["script"],
@@ -2626,7 +2626,7 @@ def operators():
       </div>
       <button class="btn-primary btn" onclick="openOpForm('')" style="margin-left:auto;">+ 新建算子</button>
     </div>
-    <div class="muted" style="margin-bottom:12px;">每个算子 = 一个「原子处理能力」的封装, 可被任务编排到工作流。</div>
+    <div class="muted" style="margin-bottom:12px;">每个算子 = 一个「原子处理能力」的封装, 可被编排到工作流。</div>
     <table class="ant-table row2">
       <thead><tr><th>名称</th><th>标识</th><th>描述</th><th>创建人</th><th>操作</th></tr></thead>
       <tbody>{rows}</tbody>
@@ -2652,7 +2652,7 @@ def operators():
           <div class="fg"><label>返回结果</label><textarea id="of_returns" class="code-editor" rows="3" placeholder="# 算子产出&#10;LeRobot 数据集目录 / 报告 JSON / CSV"></textarea></div>
         </div>
         <div class="drawer-foot">
-          <label id="of_syncTaskWrap" class="foot-check"><input type="checkbox" id="of_syncTask" checked> 同步创建任务</label>
+          <label id="of_syncTaskWrap" class="foot-check"><input type="checkbox" id="of_syncTask" checked> 同步创建工作流</label>
           <button class="btn" onclick="document.getElementById('opFormDrawer').classList.remove('active')">取消</button>
           <button class="btn btn-secondary" onclick="document.getElementById('opFormDrawer').classList.remove('active');toast('Demo: 已保存')">保存</button>
           <button class="btn-primary btn" id="of_saveNewVer" onclick="document.getElementById('opFormDrawer').classList.remove('active');toast('Demo: 已保存为新版本')">保存为新版本</button>
@@ -2689,7 +2689,7 @@ def operators():
       document.getElementById('of_script').value = o ? ('python ' + o.script) : '';
       document.getElementById('of_params').value = o ? o.params.split(' / ').join('\\n') : '';
       document.getElementById('of_returns').value = o ? o.returns.split(/ \\+ | \\/ /).join('\\n') : '';
-      // 「保存为新版本」仅编辑时显示; 「同步创建任务」仅新建时显示, 默认勾选
+      // 「保存为新版本」仅编辑时显示; 「同步创建工作流」仅新建时显示, 默认勾选
       document.getElementById('of_saveNewVer').style.display = o ? '' : 'none';
       document.getElementById('of_syncTaskWrap').style.display = o ? 'none' : '';
       document.getElementById('of_syncTask').checked = true;
@@ -2728,12 +2728,12 @@ def pipelines():
           <td>{len(pl['stages'])} 个算子</td>
           <td>{sch_cell}</td>
           <td>{pl['creator']}</td>
-          <td><label class="switch"><input type="checkbox" checked onchange="toast(this.checked?'已启用任务':'已停用任务')"><span class="slider"></span></label></td>
+          <td><label class="switch"><input type="checkbox" checked onchange="toast(this.checked?'已启用工作流':'已停用工作流')"><span class="slider"></span></label></td>
           <td class="muted">{pl['updated']}</td>
           <td class="actions-cell"><a href="/pipelines/{pl['id']}">编辑</a> · <a href="#" onclick="openRun('{pl['name']}');return false;">执行</a></td>
         </tr>"""
     if not rows:
-        rows = '<tr><td colspan="8" class="muted" style="text-align:center;padding:24px;">无匹配任务</td></tr>'
+        rows = '<tr><td colspan="8" class="muted" style="text-align:center;padding:24px;">无匹配工作流</td></tr>'
     op_checks = "".join(
         f'<label><input type="checkbox" value="{o["id"]}"{" checked" if o["id"]==f_op else ""} onchange="msUpdate(this)">{o["name"].split(" ")[0]}</label>'
         for o in OPERATORS)
@@ -2741,23 +2741,23 @@ def pipelines():
     op_hasval = "has-value" if f_op else ""
     content = f"""
     <div class="filter-bar">
-      <input placeholder="搜索任务...">
+      <input placeholder="搜索工作流...">
       <div class="ms-wrap">
         <div class="ms-trigger {op_hasval}" data-base="算子" onclick="this.closest('.ms-wrap').classList.toggle('open')"><span class="ms-label">{op_label}</span></div>
         <div class="ms-panel">{op_checks}</div>
       </div>
-      <a href="/pipelines/new" class="btn-primary btn" style="margin-left:auto;">+ 新建任务</a>
+      <a href="/pipelines/new" class="btn-primary btn" style="margin-left:auto;">+ 新建工作流</a>
     </div>
-    <div class="muted" style="margin-bottom:12px;">把算子编排成可复用、可调度的任务, 用于批量重复跑数据集。</div>
+    <div class="muted" style="margin-bottom:12px;">把算子编排成可复用、可调度的工作流, 用于批量重复跑数据集。</div>
     <table class="ant-table row2">
-      <thead><tr><th>名称</th><th>描述</th><th>算子数</th><th>周期任务数</th><th>创建人</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead>
+      <thead><tr><th>名称</th><th>描述</th><th>算子数</th><th>周期调度数</th><th>创建人</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead>
       <tbody>{rows}</tbody>
     </table>
 
-    <!-- 执行任务: 填写本次运行参数 -->
+    <!-- 执行工作流: 填写本次运行参数 -->
     <div class="drawer-mask" id="runDrawer" onclick="if(event.target===this)this.classList.remove('active')">
       <div class="drawer" style="width:480px;">
-        <div class="drawer-head"><h3>执行任务</h3><button class="drawer-close" onclick="document.getElementById('runDrawer').classList.remove('active')">&times;</button></div>
+        <div class="drawer-head"><h3>执行工作流</h3><button class="drawer-close" onclick="document.getElementById('runDrawer').classList.remove('active')">&times;</button></div>
         <div class="drawer-body">
           <div class="muted" id="runHint" style="font-size:12px;margin-bottom:14px;line-height:1.6;">提交一次性运行。填写本次运行的流程参数取值, 提交后进度见「执行记录」。</div>
           <div class="section-label">运行参数</div>
@@ -2774,7 +2774,7 @@ def pipelines():
     </div>
     <script>
     function openRun(name){{
-      document.getElementById('runHint').innerHTML = '任务 <b>'+name+'</b> · 提交一次性运行。填写本次运行的流程参数取值, 提交后进度见「执行记录」。';
+      document.getElementById('runHint').innerHTML = '工作流 <b>'+name+'</b> · 提交一次性运行。填写本次运行的流程参数取值, 提交后进度见「执行记录」。';
       document.getElementById('runDrawer').classList.add('active');
     }}
     function msUpdate(cb){{
@@ -2786,7 +2786,7 @@ def pipelines():
     }});
     </script>
     """
-    return render_page("任务管理", content, active="pipelines", breadcrumb="自动化任务 / <b>任务管理</b>")
+    return render_page("工作流管理", content, active="pipelines", breadcrumb="自动化任务 / <b>工作流管理</b>")
 
 
 WF_CANVAS_JS = r"""
@@ -2965,7 +2965,7 @@ WF_CANVAS_JS = r"""
 def pipeline_editor(pid):
     pl = next((p for p in PIPELINES if p["id"] == pid), None)
     is_new = pid == "new" or pl is None
-    name = "新建任务" if is_new else pl["name"]
+    name = "新建工作流" if is_new else pl["name"]
     stages = [] if is_new else pl["stages"]
 
     # 初始节点 (自由画布: 左→右铺开), 以及顺序连线
@@ -3001,7 +3001,7 @@ def pipeline_editor(pid):
 
     content = f"""
     <div class="wf-topbar">
-      <div class="wf-title"><a href="/pipelines" class="back">&#8249;</a> 任务: {name} <span style="color:#bfbfbf;font-size:14px;cursor:pointer;" onclick="toast('Demo: 重命名')">&#9998;</span></div>
+      <div class="wf-title"><a href="/pipelines" class="back">&#8249;</a> 工作流: {name} <span style="color:#bfbfbf;font-size:14px;cursor:pointer;" onclick="toast('Demo: 重命名')">&#9998;</span></div>
       <div class="wf-actions">
         <button class="btn" onclick="document.getElementById('flowParamDrawer').classList.add('active')">&#123;&#125; 流程参数</button>
         <button class="btn" onclick="document.getElementById('scheduleDrawer').classList.add('active')">&#9201; 周期调度</button>
@@ -3088,7 +3088,7 @@ def pipeline_editor(pid):
     <!-- 执行: 一次性运行, 配置本次调用参数 -->
     <div class="drawer-mask" id="runDrawer" onclick="if(event.target===this)this.classList.remove('active')">
       <div class="drawer" style="width:480px;">
-        <div class="drawer-head"><h3>执行任务</h3><button class="drawer-close" onclick="document.getElementById('runDrawer').classList.remove('active')">&times;</button></div>
+        <div class="drawer-head"><h3>执行工作流</h3><button class="drawer-close" onclick="document.getElementById('runDrawer').classList.remove('active')">&times;</button></div>
         <div class="drawer-body">
           <div class="muted" style="font-size:12px;margin-bottom:14px;line-height:1.6;">提交一次性运行。填写本次运行的流程参数取值并选择资源, 提交后进度见「执行记录」。</div>
           <div class="section-label">运行参数</div>
@@ -3136,12 +3136,12 @@ def pipeline_editor(pid):
     <script>{WF_CANVAS_JS.replace("__NODES__", nodes_json).replace("__EDGES__", edges_json).replace("__OPS__", ops_json)}</script>
     """
     return render_page(name, content, active="pipelines",
-                       breadcrumb=f'自动化任务 / 任务管理 / <b>{name}</b>', extra_script=None)
+                       breadcrumb=f'自动化任务 / 工作流管理 / <b>{name}</b>', extra_script=None)
 
 
 @app.route("/runs")
 def runs():
-    # 执行记录: 每行 = 一次任务执行实例 (一个任务里可能含多个算子, 故不展开到算子)
+    # 执行记录: 每行 = 一次工作流执行实例 (一个工作流里可能含多个算子, 故不展开到算子)
     st_map = {"running": ("qa-warn", "运行中", ""), "done": ("qa-pass", "成功", ""),
               "failed": ("qa-fail", "失败", "fail")}
     pl_creator = {p["id"]: p["creator"] for p in PIPELINES}
@@ -3163,19 +3163,19 @@ def runs():
         <td>{by}</td>
         <td class="muted">{r['at']}</td>
         <td class="muted">{r['dur']}</td>
-        <td class="actions-cell"><a href="#" onclick="toast('Demo: 查看任务日志');return false;">日志</a> · <a href="#" onclick="toast('Demo: 重跑');return false;">重跑</a></td></tr>"""
+        <td class="actions-cell"><a href="#" onclick="toast('Demo: 查看工作流日志');return false;">日志</a> · <a href="#" onclick="toast('Demo: 重跑');return false;">重跑</a></td></tr>"""
     n_run = sum(1 for r in RUNS if r["status"] == "running")
     n_fail = sum(1 for r in RUNS if r["status"] == "failed")
     content = f"""
     <div class="filter-bar">
-      <select class="has-value"><option value="">全部任务</option><option>标准训练数据流水线</option><option>DAgger 数据流水线</option></select>
+      <select class="has-value"><option value="">全部工作流</option><option>标准训练数据流水线</option><option>DAgger 数据流水线</option></select>
       <select class="has-value"><option value="">全部状态</option><option>成功</option><option>运行中</option><option>失败</option></select>
       <select class="has-value"><option value="">全部触发方式</option><option>手动触发</option><option>定时触发</option></select>
-      <input placeholder="搜索任务 / 产出数据集...">
+      <input placeholder="搜索工作流 / 产出数据集...">
     </div>
-    <div class="muted" style="margin-bottom:12px;">共 {len(RUNS)} 次执行 · 运行中 {n_run} · 失败 {n_fail} · 每行 = 一次任务执行实例</div>
+    <div class="muted" style="margin-bottom:12px;">共 {len(RUNS)} 次执行 · 运行中 {n_run} · 失败 {n_fail} · 每行 = 一次工作流执行实例</div>
     <table class="ant-table">
-      <thead><tr><th>实例 ID</th><th>任务名称</th><th>产出数据集</th><th>状态</th><th>触发方式</th><th>触发人</th><th>开始时间</th><th>耗时</th><th>操作</th></tr></thead>
+      <thead><tr><th>实例 ID</th><th>工作流名称</th><th>产出数据集</th><th>状态</th><th>触发方式</th><th>触发人</th><th>开始时间</th><th>耗时</th><th>操作</th></tr></thead>
       <tbody>{rows}</tbody>
     </table>
     """
